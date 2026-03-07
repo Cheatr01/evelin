@@ -5,7 +5,7 @@ This repository publishes versioned `evelin` binaries from GitHub Actions to S3.
 ## Triggers
 
 - `push` tags matching `v*`
-- manual `workflow_dispatch` with a `version` input
+- manual `workflow_dispatch` with a `version` input, but only when the workflow runs from `main`
 
 ## Version Rules
 
@@ -42,6 +42,7 @@ Optional repository variables:
 Published object layout:
 
 - `s3://<bucket>/<prefix>/v<version>/<artifact>`
+- existing objects under the version path are treated as immutable and the workflow fails instead of overwriting them
 
 Examples:
 
