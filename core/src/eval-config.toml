@@ -1,0 +1,19 @@
+[defaults]
+# Base runtime defaults for all eval suites.
+max_concurrency = 3
+codex_timeout_seconds = 180
+codex_sandbox = "read-only"
+codex_extra_args = []
+codex_isolation = false
+
+# Optional global model defaults.
+# codex_model = "gpt-5.3-codex"
+# codex_reasoning_effort = "low"
+
+# Optional override for the parent directory that will hold isolated CODEX_HOME
+# temp directories. Environment variable EVAL_CODEX_HOME_BASE_DIR wins over this.
+# codex_home_base_dir = "/tmp/codex-evals"
+
+[eval_type.skill]
+# Skill evals can override the global defaults here.
+codex_isolation = true

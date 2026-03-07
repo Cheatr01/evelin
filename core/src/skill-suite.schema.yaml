@@ -1,0 +1,112 @@
+$schema: "https://json-schema.org/draft/2020-12/schema"
+$id: "https://codex.local/tests/skill-suite.schema.yaml"
+title: "Skill Test Suite"
+description: "Single-file schema for skill gate checks and targeted eval cases."
+type: object
+additionalProperties: false
+required:
+  - eval_type
+  - skill
+  - skill_path
+  - grader
+  - rate
+properties:
+  eval_type:
+    type: string
+    enum:
+      - skill
+  skill:
+    type: string
+    minLength: 1
+  skill_path:
+    type: string
+    minLength: 1
+    pattern: "(^|.*/)SKILL\\.md$"
+  gate_requirements:
+    $ref: "#/$defs/gateRequirements"
+  eval_name:
+    type: string
+    minLength: 1
+  grader:
+    type: string
+    enum:
+      - markers
+  rate:
+    type: number
+    minimum: 0
+    maximum: 1
+  max_concurrency:
+    type: integer
+    minimum: 1
+  codex_timeout_seconds:
+    type: integer
+    minimum: 1
+  codex_isolation:
+    type: boolean
+  codex_home_base_dir:
+    type: string
+    minLength: 1
+  codex_sandbox:
+    type: string
+    enum:
+      - read-only
+      - workspace-write
+      - danger-full-access
+  codex_model:
+    type: string
+  codex_reasoning_effort:
+    type: string
+    enum:
+      - none
+      - low
+      - medium
+      - high
+      - xhigh
+  codex_extra_args:
+    type: array
+    items:
+      type: string
+  prompts_file:
+    type: string
+    minLength: 1
+  cases:
+    type: array
+    items:
+      $ref: "#/$defs/case"
+$defs:
+  stringArray:
+    type: array
+    items:
+      type: string
+  gateRequirements:
+    type: object
+    additionalProperties: false
+    required:
+      - required_snippets
+    properties:
+      required_snippets:
+        $ref: "#/$defs/stringArray"
+  expected:
+    type: object
+    additionalProperties: false
+    properties:
+      must_include:
+        $ref: "#/$defs/stringArray"
+      must_not_include:
+        $ref: "#/$defs/stringArray"
+  case:
+    type: object
+    additionalProperties: false
+    required:
+      - id
+      - prompt
+      - expected
+    properties:
+      id:
+        type: string
+        minLength: 1
+      prompt:
+        type: string
+        minLength: 1
+      expected:
+        $ref: "#/$defs/expected"
