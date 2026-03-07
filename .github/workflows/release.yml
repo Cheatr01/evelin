@@ -45,6 +45,10 @@ jobs:
 
           cargo_version="$(grep -m1 '^version = "' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')"
           if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            if [[ "${GITHUB_REF_NAME}" != "main" ]]; then
+              echo "Manual release publishing is only allowed from the main branch" >&2
+              exit 1
+            fi
             version="${INPUT_VERSION#v}"
           else
             version="${GITHUB_REF_NAME#v}"
@@ -173,7 +177,12 @@ jobs:
 
           for file in dist/*; do
             [[ -f "${file}" ]] || continue
-            aws s3 cp "${file}" "s3://${AWS_RELEASE_BUCKET}/${release_prefix}/v${version}/$(basename "${file}")" --no-progress
+            key="${release_prefix}/v${version}/$(basename "${file}")"
+            if aws s3api head-object --bucket "${AWS_RELEASE_BUCKET}" --key "${key}" >/dev/null 2>&1; then
+              echo "Refusing to overwrite existing artifact s3://${AWS_RELEASE_BUCKET}/${key}" >&2
+              exit 1
+            fi
+            aws s3 cp "${file}" "s3://${AWS_RELEASE_BUCKET}/${key}" --no-progress
           done
 
       - name: Publish release summary
