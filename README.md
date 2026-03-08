@@ -61,7 +61,7 @@ Bundled default template je v [core/src/eval-config.toml](/Users/jiri/projects/e
 
 ## Instalace z release artifactu
 
-Downstream agent asset repozitare muzou stahnout konkretni verzi pomoci [scripts/install-evelin.sh](/Users/jiri/.codex/worktrees/b4be/evelin/.worktrees/10-install-script/scripts/install-evelin.sh).
+Downstream agent asset repozitare muzou stahnout konkretni verzi pomoci [scripts/install-evelin.sh](./scripts/install-evelin.sh).
 
 ```bash
 ./scripts/install-evelin.sh 0.1.0
@@ -69,10 +69,11 @@ Downstream agent asset repozitare muzou stahnout konkretni verzi pomoci [scripts
 
 Skript:
 
-- detekuje podporovany OS/arch a vybere odpovidajici artifact
+- detekuje podporovany OS/arch a vybere odpovidajici artifact pro publikovane targety (`linux/x86_64`, `macOS/aarch64`)
 - stahne `SHA256SUMS` i konkretni archive
 - overi checksum pred instalaci
 - nainstaluje binarku do `~/.local/bin` nebo do `EVELIN_INSTALL_DIR`
+- na Windows zatim ocekava manualni stazeni publikovaneho `.zip` artifactu
 
 Konfigurace zdroje artifactu:
 

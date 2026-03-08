@@ -96,9 +96,10 @@ detect_target() {
 
   case "${os}:${arch}" in
     linux:x86_64) printf 'x86_64-unknown-linux-gnu\n' ;;
-    linux:aarch64) printf 'aarch64-unknown-linux-gnu\n' ;;
-    macos:x86_64) printf 'x86_64-apple-darwin\n' ;;
     macos:aarch64) printf 'aarch64-apple-darwin\n' ;;
+    linux:aarch64|macos:x86_64)
+      fail "unsupported platform combination: ${os}/${arch}; published install targets are linux/x86_64 and macOS/aarch64"
+      ;;
     *)
       fail "unsupported platform combination: ${os}/${arch}"
       ;;
