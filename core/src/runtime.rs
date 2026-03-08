@@ -267,7 +267,7 @@ impl SuiteEnvironment {
         }
         let skills_src = template_home.join("skills");
         if skills_src.exists() {
-            symlink_path(&skills_src, &case_home.join("skills"))?;
+            copy_path(&skills_src, &case_home.join("skills"))?;
         }
 
         let mut env = self.base_env.clone();
@@ -346,7 +346,7 @@ fn seed_isolated_codex_home(
             skill_path.display()
         )));
     }
-    symlink_path(skill_dir, &isolated_home.join("skills").join(&config.skill))?;
+    copy_path(skill_dir, &isolated_home.join("skills").join(&config.skill))?;
     Ok(())
 }
 
@@ -385,6 +385,43 @@ fn squeeze(text: &str) -> String {
 }
 
 fn copy_path(source: &Path, destination: &Path) -> Result<()> {
+    if source.is_dir() {
+        return copy_dir_recursive(source, destination);
+    }
+    copy_file(source, destination)
+}
+
+fn copy_dir_recursive(source: &Path, destination: &Path) -> Result<()> {
+    fs::create_dir_all(destination).map_err(|source_error| EvelinError::Io {
+        path: destination.to_path_buf(),
+        source: source_error,
+    })?;
+    for entry in fs::read_dir(source).map_err(|source_error| EvelinError::Io {
+        path: source.to_path_buf(),
+        source: source_error,
+    })? {
+        let entry = entry.map_err(|source_error| EvelinError::Io {
+            path: source.to_path_buf(),
+            source: source_error,
+        })?;
+        let source_path = entry.path();
+        let destination_path = destination.join(entry.file_name());
+        let file_type = entry.file_type().map_err(|source_error| EvelinError::Io {
+            path: source_path.clone(),
+            source: source_error,
+        })?;
+        if file_type.is_dir() {
+            copy_dir_recursive(&source_path, &destination_path)?;
+        } else if file_type.is_symlink() && source_path.is_dir() {
+            copy_dir_recursive(&source_path, &destination_path)?;
+        } else {
+            copy_file(&source_path, &destination_path)?;
+        }
+    }
+    Ok(())
+}
+
+fn copy_file(source: &Path, destination: &Path) -> Result<()> {
     if let Some(parent) = destination.parent() {
         fs::create_dir_all(parent).map_err(|source_error| EvelinError::Io {
             path: parent.to_path_buf(),
@@ -398,42 +435,58 @@ fn copy_path(source: &Path, destination: &Path) -> Result<()> {
     Ok(())
 }
 
-fn symlink_path(source: &Path, destination: &Path) -> Result<()> {
-    if let Some(parent) = destination.parent() {
-        fs::create_dir_all(parent).map_err(|source_error| EvelinError::Io {
-            path: parent.to_path_buf(),
-            source: source_error,
-        })?;
-    }
-    if destination.exists() {
-        return Ok(());
-    }
-    create_symlink(source, destination)
-}
+#[cfg(test)]
+mod tests {
+    use std::fs;
 
-#[cfg(unix)]
-fn create_symlink(source: &Path, destination: &Path) -> Result<()> {
-    std::os::unix::fs::symlink(source, destination).map_err(|source_error| EvelinError::Io {
-        path: destination.to_path_buf(),
-        source: source_error,
-    })
-}
+    use serde_json::json;
+    use tempfile::TempDir;
 
-#[cfg(windows)]
-fn create_symlink(source: &Path, destination: &Path) -> Result<()> {
-    if source.is_dir() {
-        std::os::windows::fs::symlink_dir(source, destination).map_err(|source_error| {
-            EvelinError::Io {
-                path: destination.to_path_buf(),
-                source: source_error,
-            }
-        })
-    } else {
-        std::os::windows::fs::symlink_file(source, destination).map_err(|source_error| {
-            EvelinError::Io {
-                path: destination.to_path_buf(),
-                source: source_error,
-            }
-        })
+    use crate::config::{effective_runner_config, EvalConfig, ProjectLayout};
+
+    use super::SuiteEnvironment;
+
+    #[test]
+    fn isolated_case_env_copies_fixture_skill_into_codex_home() {
+        let tmp = TempDir::new().expect("tmp");
+        let root = tmp.path();
+        let skill_path = root.join("skills").join("hello-world").join("SKILL.md");
+        fs::create_dir_all(skill_path.parent().expect("skill dir")).expect("skills");
+        fs::write(&skill_path, "Hello world!\n").expect("skill");
+
+        let config = EvalConfig::from_value(
+            &json!({
+                "eval_type": "skill",
+                "skill": "hello-world",
+                "skill_path": "skills/hello-world/SKILL.md",
+                "grader": "markers",
+                "rate": 1.0,
+                "cases": [{"id":"smoke","prompt":"Use $hello-world skill.","expected":{"must_include":["Hello world!"],"must_not_include":[]}}]
+            }),
+            root,
+        )
+        .expect("config");
+        let layout = ProjectLayout::discover(root);
+        let runner = effective_runner_config(&layout, &config).expect("runner");
+        let suite_env = SuiteEnvironment::prepare(&layout, &config, &runner).expect("suite env");
+
+        assert!(suite_env.codex_isolation);
+
+        let case_env = suite_env.case_env("smoke").expect("case env");
+        let case_home = case_env
+            .env
+            .get("CODEX_HOME")
+            .map(std::path::PathBuf::from)
+            .expect("case CODEX_HOME");
+        let linked_skill = case_home
+            .join("skills")
+            .join("hello-world")
+            .join("SKILL.md");
+
+        assert!(linked_skill.exists());
+        assert_eq!(
+            fs::read_to_string(&linked_skill).expect("copied skill"),
+            fs::read_to_string(&skill_path).expect("fixture skill"),
+        );
     }
 }

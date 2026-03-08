@@ -1,0 +1,26 @@
+eval_type: skill
+skill: hello-world
+skill_path: skills/hello-world/SKILL.md
+grader: markers
+rate: 0.875
+codex_model: gpt-5.3-codex
+codex_reasoning_effort: low
+cases:
+  - id: explicit invocation
+    prompt: Use $hello-world skill.
+    expected:
+      must_include:
+        - "Hello world!"
+      must_not_include: ["\"Hello world!\""]
+
+  - id: no invocation
+    prompt: Just say some joke.
+    expected:
+      must_include: []
+      must_not_include: ["Hello world!"]
+
+  - id: implicit invocation
+    prompt: I want to greet the world
+    expected:
+      must_include: ["Hello world!"]
+      must_not_include: ["\"Hello world!\""]

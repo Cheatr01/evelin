@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 use std::env;
+use std::fs;
 use std::path::{Path, PathBuf};
 
 use regex::Regex;
@@ -178,6 +179,32 @@ pub struct GlobalEvalConfig {
     pub eval_type: BTreeMap<String, RunnerDefaultsPatch>,
 }
 
+impl GlobalEvalConfig {
+    pub fn from_toml_str(text: &str, path: &Path) -> Result<Self> {
+        let toml = toml::from_str::<toml::Value>(text).map_err(|source| EvelinError::Toml {
+            path: path.to_path_buf(),
+            source,
+        })?;
+        let value = serde_json::to_value(toml).map_err(|source| {
+            EvelinError::message(format!(
+                "toml conversion error at {}: {source}",
+                path.display()
+            ))
+        })?;
+        ProjectLayout::parse_global_eval_config_value(&value)
+    }
+
+    pub fn apply_overlay(&mut self, overlay: Self) {
+        self.defaults.merge_from(&overlay.defaults);
+        for (eval_type, patch) in overlay.eval_type {
+            self.eval_type
+                .entry(eval_type)
+                .or_default()
+                .merge_from(&patch);
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize, Default)]
 pub struct RunnerDefaultsPatch {
     pub max_concurrency: Option<usize>,
@@ -229,6 +256,33 @@ impl RunnerDefaultsPatch {
             };
         }
     }
+
+    pub fn merge_from(&mut self, other: &Self) {
+        if other.max_concurrency.is_some() {
+            self.max_concurrency = other.max_concurrency;
+        }
+        if other.codex_timeout_seconds.is_some() {
+            self.codex_timeout_seconds = other.codex_timeout_seconds;
+        }
+        if let Some(value) = &other.codex_sandbox {
+            self.codex_sandbox = Some(value.clone());
+        }
+        if let Some(value) = &other.codex_model {
+            self.codex_model = Some(value.clone());
+        }
+        if let Some(value) = &other.codex_reasoning_effort {
+            self.codex_reasoning_effort = Some(value.clone());
+        }
+        if let Some(value) = &other.codex_extra_args {
+            self.codex_extra_args = Some(value.clone());
+        }
+        if other.codex_isolation.is_some() {
+            self.codex_isolation = other.codex_isolation;
+        }
+        if let Some(value) = &other.codex_home_base_dir {
+            self.codex_home_base_dir = Some(value.clone());
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -278,7 +332,7 @@ pub struct ProjectLayout {
 
 impl ProjectLayout {
     pub fn discover(root: impl Into<PathBuf>) -> Self {
-        let root = root.into();
+        let root = normalize_root_path(root.into());
         Self {
             skills_dir: root.join("skills"),
             tests_skills_dir: root.join("tests").join("src").join("skills"),
@@ -293,11 +347,19 @@ impl ProjectLayout {
     }
 
     pub fn load_global_eval_config(&self) -> Result<GlobalEvalConfig> {
-        if !self.global_eval_config_path.exists() {
-            return Ok(GlobalEvalConfig::default());
+        let mut global = GlobalEvalConfig::from_toml_str(
+            DEFAULT_EVAL_CONFIG_TOML,
+            Path::new("core/src/eval-config.toml"),
+        )?;
+        if self.global_eval_config_path.exists() {
+            let value = load_document(&self.global_eval_config_path)?;
+            global.apply_overlay(Self::parse_global_eval_config_value(&value)?);
         }
-        let value = load_document(&self.global_eval_config_path)?;
-        let object = as_object(&value, "global eval config")?;
+        Ok(global)
+    }
+
+    fn parse_global_eval_config_value(value: &Value) -> Result<GlobalEvalConfig> {
+        let object = as_object(value, "global eval config")?;
         let defaults = object
             .get("defaults")
             .map(parse_patch)
@@ -315,6 +377,17 @@ impl ProjectLayout {
             eval_type,
         })
     }
+}
+
+fn normalize_root_path(root: PathBuf) -> PathBuf {
+    let absolute = if root.is_absolute() {
+        root
+    } else {
+        env::current_dir()
+            .map(|cwd| cwd.join(&root))
+            .unwrap_or(root)
+    };
+    fs::canonicalize(&absolute).unwrap_or(absolute)
 }
 
 pub fn effective_runner_config(
@@ -619,5 +692,48 @@ codex_isolation = true
         assert_eq!(runner.codex_sandbox, "workspace-write");
         assert_eq!(runner.codex_extra_args, vec!["--foo".to_owned()]);
         assert!(runner.codex_isolation);
+    }
+
+    #[test]
+    fn uses_bundled_skill_eval_defaults_without_project_eval_config() {
+        let tmp = TempDir::new().expect("tmp");
+        let config = EvalConfig::from_value(
+            &json!({
+                "eval_type": "skill",
+                "skill": "hello-world",
+                "skill_path": "skills/hello-world/SKILL.md",
+                "grader": "markers",
+                "rate": 0.875,
+                "cases": [{"id":"a","prompt":"b","expected":{"must_include":[],"must_not_include":[]}}]
+            }),
+            tmp.path(),
+        )
+        .expect("config");
+
+        let runner =
+            effective_runner_config(&ProjectLayout::discover(tmp.path()), &config).expect("runner");
+        assert_eq!(runner.max_concurrency, 3);
+        assert_eq!(runner.codex_timeout_seconds, 180);
+        assert_eq!(runner.codex_sandbox, "read-only");
+        assert!(runner.codex_isolation);
+    }
+
+    #[test]
+    fn discovers_relative_root_as_absolute_path() {
+        let cwd = env::current_dir().expect("cwd");
+        let tmp = tempfile::tempdir_in(&cwd).expect("tmp in cwd");
+        let relative_root = tmp
+            .path()
+            .strip_prefix(&cwd)
+            .expect("relative root")
+            .to_path_buf();
+
+        let layout = ProjectLayout::discover(relative_root);
+
+        assert!(layout.root.is_absolute());
+        assert_eq!(
+            fs::canonicalize(&layout.root).expect("layout root"),
+            fs::canonicalize(tmp.path()).expect("tmp root"),
+        );
     }
 }
