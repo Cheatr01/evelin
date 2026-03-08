@@ -11,7 +11,6 @@ use evelin::schema;
 use evelin::suite::{run_skill_suite, write_suite_report};
 
 const LABEL_WIDTH: usize = 34;
-const STEP_LABEL_WIDTH: usize = 28;
 
 #[derive(Debug, Parser)]
 #[command(name = "evelin")]
@@ -216,6 +215,20 @@ fn run_suite_command(args: SuiteArgs) -> Result<i32> {
     write_suite_report(&summary_out, &report)?;
 
     println!("{} skill {}", icon("info"), report.skill);
+    let step_type_width = report
+        .steps
+        .iter()
+        .map(|step| suite_step_type_label(&step.step_type).len())
+        .max()
+        .unwrap_or(5)
+        .max("runtime".len())
+        .max("suite".len());
+    let step_name_width = report
+        .steps
+        .iter()
+        .map(|step| step.name.len())
+        .max()
+        .unwrap_or(5);
     for step in &report.steps {
         let detail = step
             .detail
@@ -223,37 +236,62 @@ fn run_suite_command(args: SuiteArgs) -> Result<i32> {
             .or_else(|| step.reason.clone())
             .unwrap_or_default();
         println!(
-            "  {} {:<STEP_LABEL_WIDTH$} {}",
+            "  {} {:<step_type_width$} {:<step_name_width$} {}",
             icon(&step.status),
-            format!("{}:{}", step.step_type, step.name),
+            suite_step_type_label(&step.step_type),
+            step.name,
             detail,
-            STEP_LABEL_WIDTH = STEP_LABEL_WIDTH
+            step_type_width = step_type_width,
+            step_name_width = step_name_width
         );
         if let Some(runtime_detail) = &step.runtime_detail {
             println!(
-                "  {} {:<STEP_LABEL_WIDTH$} {}",
+                "  {} {:<step_type_width$} {:<step_name_width$} {}",
                 icon("info"),
-                format!("runtime:{}", step.name),
-                runtime_detail,
-                STEP_LABEL_WIDTH = STEP_LABEL_WIDTH
+                "runtime",
+                step.name,
+                format_runtime_detail(runtime_detail),
+                step_type_width = step_type_width,
+                step_name_width = step_name_width
             );
         }
     }
     println!(
-        "  {} {:<STEP_LABEL_WIDTH$} pass={}  fail={}  skipped={}  t={}ms",
+        "  {} {:<step_type_width$} {:<step_name_width$} {}",
         icon(&report.summary.verdict),
         "suite",
-        report.summary.steps_passed,
-        report.summary.steps_failed,
-        report.summary.steps_skipped,
-        report.summary.duration_ms,
-        STEP_LABEL_WIDTH = STEP_LABEL_WIDTH
+        "",
+        format!(
+            "pass={}  fail={}  skipped={}  t={}ms",
+            report.summary.steps_passed,
+            report.summary.steps_failed,
+            report.summary.steps_skipped,
+            report.summary.duration_ms
+        ),
+        step_type_width = step_type_width,
+        step_name_width = step_name_width
     );
     Ok(if report.summary.verdict == "fail" {
         1
     } else {
         0
     })
+}
+
+fn suite_step_type_label(step_type: &str) -> &str {
+    match step_type {
+        "schema_lint" => "schema",
+        "gate_lint" => "gate",
+        other => other,
+    }
+}
+
+fn format_runtime_detail(runtime_detail: &str) -> String {
+    runtime_detail
+        .split("  ")
+        .filter(|segment| !segment.is_empty())
+        .collect::<Vec<_>>()
+        .join(" | ")
 }
 
 fn write_json<T: serde::Serialize>(path: &PathBuf, value: &T) -> Result<()> {
@@ -290,4 +328,24 @@ fn paint(text: &str, code: &str) -> String {
         return text.to_owned();
     }
     format!("\u{1b}[{code}m{text}\u{1b}[0m")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{format_runtime_detail, suite_step_type_label};
+
+    #[test]
+    fn shortens_suite_step_type_labels() {
+        assert_eq!(suite_step_type_label("schema_lint"), "schema");
+        assert_eq!(suite_step_type_label("gate_lint"), "gate");
+        assert_eq!(suite_step_type_label("eval"), "eval");
+    }
+
+    #[test]
+    fn compacts_runtime_detail_separators() {
+        assert_eq!(
+            format_runtime_detail("isolation=on  concurrency=3/3  retries=0  sandbox=read-only"),
+            "isolation=on | concurrency=3/3 | retries=0 | sandbox=read-only"
+        );
+    }
 }
