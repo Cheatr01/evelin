@@ -1,0 +1,202 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Release version from Cargo.toml, with or without a leading v
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: "1"
+
+jobs:
+  prepare:
+    name: Resolve version and publish contract
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.meta.outputs.version }}
+      aws_region: ${{ steps.meta.outputs.aws_region }}
+      release_prefix: ${{ steps.meta.outputs.release_prefix }}
+      s3_uri: ${{ steps.meta.outputs.s3_uri }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Resolve release metadata
+        id: meta
+        shell: bash
+        env:
+          INPUT_VERSION: ${{ inputs.version }}
+          AWS_RELEASE_BUCKET: ${{ vars.AWS_RELEASE_BUCKET }}
+          AWS_RELEASE_PREFIX: ${{ vars.AWS_RELEASE_PREFIX }}
+          AWS_RELEASE_REGION: ${{ vars.AWS_RELEASE_REGION }}
+        run: |
+          set -euo pipefail
+
+          cargo_version="$(grep -m1 '^version = "' Cargo.toml | sed -E 's/version = "([^"]+)"/\1/')"
+          if [[ "${GITHUB_EVENT_NAME}" == "workflow_dispatch" ]]; then
+            if [[ "${GITHUB_REF_NAME}" != "main" ]]; then
+              echo "Manual release publishing is only allowed from the main branch" >&2
+              exit 1
+            fi
+            version="${INPUT_VERSION#v}"
+          else
+            version="${GITHUB_REF_NAME#v}"
+          fi
+
+          if [[ -z "${version}" ]]; then
+            echo "Unable to resolve release version" >&2
+            exit 1
+          fi
+          if [[ "${version}" != "${cargo_version}" ]]; then
+            echo "Release version ${version} does not match Cargo.toml version ${cargo_version}" >&2
+            exit 1
+          fi
+          if [[ -z "${AWS_RELEASE_BUCKET}" ]]; then
+            echo "Set repository variable AWS_RELEASE_BUCKET before publishing" >&2
+            exit 1
+          fi
+
+          release_prefix="${AWS_RELEASE_PREFIX:-evelin}"
+          aws_region="${AWS_RELEASE_REGION:-eu-west-1}"
+          s3_uri="s3://${AWS_RELEASE_BUCKET}/${release_prefix}/v${version}"
+
+          {
+            echo "version=${version}"
+            echo "aws_region=${aws_region}"
+            echo "release_prefix=${release_prefix}"
+            echo "s3_uri=${s3_uri}"
+          } >> "${GITHUB_OUTPUT}"
+
+  build:
+    name: Build ${{ matrix.label }} archive
+    needs: prepare
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - label: Linux
+            runner: ubuntu-latest
+            artifact_name: release-linux
+          - label: macOS
+            runner: macos-latest
+            artifact_name: release-macos
+          - label: Windows
+            runner: windows-latest
+            artifact_name: release-windows
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Show toolchain
+        shell: bash
+        run: |
+          rustc --version
+          cargo --version
+          rustc -vV
+
+      - name: Build release binary
+        shell: bash
+        run: cargo build --locked --release
+
+      - name: Package release archive
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          artifact_path="$(bash scripts/package-release.sh "${{ needs.prepare.outputs.version }}" dist)"
+          echo "artifact_path=${artifact_path}" >> "${GITHUB_OUTPUT}"
+
+      - name: Upload packaged archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: ${{ steps.package.outputs.artifact_path }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish archives to S3
+    needs:
+      - prepare
+      - build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Download packaged archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: release-*
+          merge-multiple: true
+
+      - name: Verify publish configuration
+        shell: bash
+        env:
+          AWS_RELEASE_BUCKET: ${{ vars.AWS_RELEASE_BUCKET }}
+          AWS_RELEASE_ROLE_ARN: ${{ vars.AWS_RELEASE_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          : "${AWS_RELEASE_BUCKET:?Set repository variable AWS_RELEASE_BUCKET}"
+          : "${AWS_RELEASE_ROLE_ARN:?Set repository variable AWS_RELEASE_ROLE_ARN}"
+
+      - name: Generate checksum manifest
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          sha256sum ./* > SHA256SUMS
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-region: ${{ needs.prepare.outputs.aws_region }}
+          mask-aws-account-id: true
+          role-to-assume: ${{ vars.AWS_RELEASE_ROLE_ARN }}
+
+      - name: Upload archives and checksums
+        shell: bash
+        env:
+          AWS_RELEASE_BUCKET: ${{ vars.AWS_RELEASE_BUCKET }}
+        run: |
+          set -euo pipefail
+          version="${{ needs.prepare.outputs.version }}"
+          release_prefix="${{ needs.prepare.outputs.release_prefix }}"
+
+          for file in dist/*; do
+            [[ -f "${file}" ]] || continue
+            key="${release_prefix}/v${version}/$(basename "${file}")"
+            if aws s3api head-object --bucket "${AWS_RELEASE_BUCKET}" --key "${key}" >/dev/null 2>&1; then
+              echo "Refusing to overwrite existing artifact s3://${AWS_RELEASE_BUCKET}/${key}" >&2
+              exit 1
+            fi
+            aws s3 cp "${file}" "s3://${AWS_RELEASE_BUCKET}/${key}" --no-progress
+          done
+
+      - name: Publish release summary
+        shell: bash
+        run: |
+          {
+            echo "## Published evelin artifacts"
+            echo
+            echo "Release prefix: \`${{ needs.prepare.outputs.s3_uri }}\`"
+            echo
+            echo "| File |"
+            echo "| --- |"
+            for file in dist/*; do
+              [[ -f "${file}" ]] || continue
+              echo "| $(basename "${file}") |"
+            done
+          } >> "${GITHUB_STEP_SUMMARY}"

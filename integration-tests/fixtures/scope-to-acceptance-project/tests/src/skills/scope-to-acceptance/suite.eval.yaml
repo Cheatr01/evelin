@@ -1,0 +1,18 @@
+eval_type: skill
+skill: scope-to-acceptance
+skill_path: skills/scope-to-acceptance/SKILL.md
+gate_requirements:
+  required_snippets:
+    - "## Workflow"
+    - "## Output Contract"
+    - "## Gate Rules"
+grader: markers
+rate: 0.5
+cases:
+  - id: explicit
+    prompt: use the skill
+    expected:
+      must_include:
+        - "Outcome Statement:"
+        - "Scope (in):"
+      must_not_include: []

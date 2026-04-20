@@ -59,6 +59,39 @@ Bundled default template je v [core/src/eval-config.toml](/Users/jiri/projects/e
 4. inline hodnoty v konkretnim eval configu
 5. `EVAL_CODEX_HOME_BASE_DIR`
 
+## Instalace z release artifactu
+
+Downstream agent asset repozitare muzou stahnout konkretni verzi pomoci [scripts/install-evelin.sh](./scripts/install-evelin.sh).
+
+```bash
+./scripts/install-evelin.sh 0.1.0
+```
+
+Skript:
+
+- detekuje podporovany OS/arch a vybere odpovidajici artifact pro publikovane targety (`linux/x86_64`, `macOS/aarch64`)
+- stahne `SHA256SUMS` i konkretni archive
+- overi checksum pred instalaci
+- nainstaluje binarku do `~/.local/bin` nebo do `EVELIN_INSTALL_DIR`
+- na Windows zatim ocekava manualni stazeni publikovaneho `.zip` artifactu
+
+Konfigurace zdroje artifactu:
+
+- `EVELIN_RELEASE_BASE_URL`:
+  - explicitni base URL, napriklad `https://s3.eu-west-1.amazonaws.com/my-bucket/evelin`
+- nebo odvozeni ze S3:
+  - `EVELIN_S3_BUCKET` povinny
+  - `EVELIN_S3_REGION` optional, default `eu-west-1`
+  - `EVELIN_S3_PREFIX` optional, default `evelin`
+
+Priklad pro downstream repo:
+
+```bash
+EVELIN_S3_BUCKET=my-release-bucket \
+EVELIN_S3_PREFIX=evelin \
+./scripts/install-evelin.sh v0.1.0
+```
+
 ## Vyvoj
 
 ```bash
